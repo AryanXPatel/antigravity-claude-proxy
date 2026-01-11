@@ -182,30 +182,52 @@ window.Components.accountManager = () => ({
      */
     getMainModelQuota(account) {
         const limits = account.limits || {};
-        const modelIds = Object.keys(limits);
+        
+        const getQuotaVal = (id) => {
+             const l = limits[id];
+             if (!l) return -1;
+             if (l.remainingFraction !== null) return l.remainingFraction;
+             if (l.resetTime) return 0; // Rate limited
+             return -1; // Unknown
+        };
 
-        if (modelIds.length === 0) {
-            return { percent: null, model: '-' };
-        }
+        const validIds = Object.keys(limits).filter(id => getQuotaVal(id) >= 0);
+        
+        if (validIds.length === 0) return { percent: null, model: '-' };
 
-        // Priority: opus > sonnet > flash > others
-        const priorityModels = [
-            modelIds.find(m => m.toLowerCase().includes('opus')),
-            modelIds.find(m => m.toLowerCase().includes('sonnet')),
-            modelIds.find(m => m.toLowerCase().includes('flash')),
-            modelIds[0] // Fallback to first model
-        ];
+        const getPriority = (id) => {
+            const lower = id.toLowerCase();
+            const val = getQuotaVal(id);
+            const isAlive = val > 0.01; // Treat < 1% as dead for priority purposes
+            
+            // Hierarchy: 
+            // 1. High Tier (Alive)
+            // 2. High Tier (Dead) - to warn user
+            // 3. Low Tier (Alive) - fallback
+            // 4. Low Tier (Dead)
+            
+            if (lower.includes('opus')) return isAlive ? 100 : 60;
+            if (lower.includes('sonnet')) return isAlive ? 90 : 55;
+            // Gemini 3 Pro / Ultra
+            if (lower.includes('gemini-3') && (lower.includes('pro') || lower.includes('ultra'))) return isAlive ? 80 : 50;
+            if (lower.includes('pro')) return isAlive ? 75 : 45; // Other Pro models
+            
+            // Mid/Low Tier
+            if (lower.includes('haiku')) return isAlive ? 30 : 15;
+            if (lower.includes('flash')) return isAlive ? 20 : 10;
+            
+            return isAlive ? 5 : 0;
+        };
 
-        const selectedModel = priorityModels.find(m => m) || modelIds[0];
-        const quota = limits[selectedModel];
+        // Sort by priority desc
+        validIds.sort((a, b) => getPriority(b) - getPriority(a));
 
-        if (!quota || quota.remainingFraction === null) {
-            return { percent: null, model: selectedModel };
-        }
-
+        const bestModel = validIds[0];
+        const val = getQuotaVal(bestModel);
+        
         return {
-            percent: Math.round(quota.remainingFraction * 100),
-            model: selectedModel
+            percent: Math.round(val * 100),
+            model: bestModel
         };
     }
 });
